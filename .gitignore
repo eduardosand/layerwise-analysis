@@ -5,7 +5,8 @@ model/
 plots/
 results/
 save/
-
+sts_data/
+checkpoints/
 **/*.ipynb
 **/__pycache__/
 **/.DS_Store
