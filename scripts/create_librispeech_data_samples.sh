@@ -3,11 +3,15 @@ data_dir=$2
 alignment_dir=$3
 dataset_split=$4
 span=$5
+dataset=$6
+# either librispeech or libriTTS
+if [ "$dataset" = "librispeech" ]; then
+    audio_ext=flac
+elif [ "$dataset" = "libriTTS" ]; then
+    audio_ext=wav
+fi
 
 num_samples=500
-dataset=librispeech
-
-audio_ext=flac
 dir_depth=3
 
 if [ "$span" = "frame" ]; then	
