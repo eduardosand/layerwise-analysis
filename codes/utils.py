@@ -1,6 +1,7 @@
 import json
 import pickle as pkl
 import time
+import os
 
 
 def save_dct(fname, dict_name):
@@ -44,8 +45,21 @@ def load_pkl(fname, encdng=None):
 
 
 def write_to_file(write_str, fname):
-    with open(fname, "w") as f:
-        f.write(write_str)
+    """Write string to file with detailed error logging"""
+    try:
+        print(f"\nAttempting to write to file: {fname}")
+        
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(fname), exist_ok=True)
+        
+        with open(fname, "w") as f:
+            f.write(write_str)
+        print(f"Successfully wrote to file: {fname}")
+        
+    except Exception as e:
+        print(f"\nError in write_to_file:")
+        print(f"File path: {fname}")
+        raise  # Re-raise the exception after logging
 
 
 def add_to_file(write_str, fname):
