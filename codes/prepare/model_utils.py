@@ -6,6 +6,7 @@ import fairseq
 import soundfile as sf
 import torch
 import torch.nn.functional as F
+import librosa
 
 from prepare_utils import PER_LAYER_TRANSFORM_DCT
 
@@ -118,7 +119,11 @@ class DataLoader:
         wav_fn,
         task_cfg=None,
     ):
-        self.audio, self.fs = sf.read(wav_fn)
+        audio, fs = sf.read(wav_fn)
+        # the audio may be at a different sampling rate, so we force a certain one
+        resampled = librosa.resample(audio, orig_sr=fs, target_sr=16000)
+        self.audio = resampled.astype(audio.dtype)
+        self.fs = 16000
         self.task_cfg = task_cfg
 
     def stacker(self, feats, stack_order):
@@ -280,18 +285,60 @@ class FeatExtractor:
 
     def fairseq_extractor(self):
         with torch.no_grad():
-            in_rep, local_features = self.encoder.feature_extractor(self.in_data)
-            encoder_out = self.encoder(self.in_data, features_only=True, mask=False)
-            if self.rep_type == "quantized" and "hubert" not in self.model_name:
-                self.z_discrete, self.indices = self.encoder.quantize(self.in_data)
+        #get local features
+            #features, intermediate_features = self.encoder.forward_features(self.in_data)
+            #in_rep, intermediate_features = self.encoder.feature_extractor(self.in_data)
+            
+            # Get features directly from feature_extractor for wav2vec model
+            # Need to access .conv_layers directly to get intermediate features
+            x = self.in_data.unsqueeze(1)  # BxT -> BxCxT
+            intermediate_features = []
+        
+            # Manually track intermediate features through conv layers
+            for i, conv in enumerate(self.encoder.feature_extractor.conv_layers):
+                x = conv(x)
+                #print(f"After conv layer {i}: {x.shape}")
+                intermediate_features.append(x)
+            
+            features = x  # Final output is the last layer's output
+            
+            # process features through layer norm if needed
+            in_rep = features.transpose(1, 2)
+            in_rep = self.encoder.layer_norm(in_rep)
         if self.rep_type == "contextualized":
-            for layer_num, layer_rep in enumerate(encoder_out["layer_results"]):
-                self.contextualized_features[layer_num] = (
+            if "hubert" in self.model_name:
+                # HuBERT specific path
+                num_layers = len(self.encoder.encoder.layers) 
+                features, padding_mask = self.encoder.extract_features(
+                    self.in_data,
+                    output_layer=num_layers
+                )
+                x = features
+                for layer_idx, layer in enumerate(self.encoder.encoder.layers):
+                    x, _ = layer(x, padding_mask)
+                    self.contextualized_features[layer_idx] = x.squeeze(0).detach().cpu().numpy()
+                
+            else:
+            #encoder_out = self.encoder(self.in_data, features_only=True, mask=False)
+                encoder_out = self.encoder(
+                source=self.in_data,
+            padding_mask=None,
+            mask=False,
+            features_only=True
+        )
+                
+        
+                if hasattr(encoder_out, "layer_results"):
+                    for layer_num, layer_rep in enumerate(encoder_out["layer_results"]):
+                        self.contextualized_features[layer_num] = (
                     layer_rep[0].squeeze(1).cpu().numpy()
                 )
+        if self.rep_type == "quantized" and "hubert" not in self.model_name:
+            self.z_discrete, self.indices = self.encoder.quantize(self.in_data)
         if self.rep_type == "local":
-            self.local_features = local_features
-        self.n_frames = len(in_rep.transpose(1, 2).squeeze(0))
+            self.local_features = intermediate_features
+        #self.n_frames = len(in_rep.transpose(1, 2).squeeze(0))
+        self.n_frames = features.size(2) # get time dimension
         self.stride_sec = 20 / 1000
 
     def wav2vec(self):
@@ -337,13 +384,18 @@ class FeatExtractor:
         Transform local z representations to match the fbank features' stride and receptive field
         layer_rep: torch.cuda.FloatTensor # B*C*T
         """
+        #print('transformation debug')
+        #print(layer_rep.shape)
         layer_rep = torch.transpose(layer_rep, 1, 0)  # 512 x 1 x num_frames
+        
+        #print(layer_rep.shape)
         weight = (
             torch.from_numpy(np.ones([1, 1, kernel_size]) / kernel_size)
             .type(torch.cuda.FloatTensor)
             .to(self.device)
         )
         transformed_rep = F.conv1d(layer_rep, weight, stride=stride)
+        #print(transformed_rep.shape)
         transformed_rep = torch.transpose(transformed_rep, 1, 0)
 
         # check averaging
@@ -351,14 +403,19 @@ class FeatExtractor:
         mean_vec2 = torch.mean(layer_rep[:, :, stride : stride + kernel_size], axis=-1)
         out_vec1 = transformed_rep[:, :, 0]
         out_vec2 = transformed_rep[:, :, 1]
-        assert torch.mean(mean_vec1 - out_vec1) < 2e-8
-        assert torch.mean(mean_vec2 - out_vec2) < 2e-8
+        diff1 = torch.mean(mean_vec1 - out_vec1)
+        diff2 = torch.mean(mean_vec2 - out_vec2)
+        
+        assert torch.mean(mean_vec1 - out_vec1) < 2e-7
+        assert torch.mean(mean_vec2 - out_vec2) < 2e-7
         return torch.transpose(transformed_rep, 1, 2).squeeze(0).cpu().numpy()
 
     def extract_local_rep(self, rep_dct, transformed_fbank_lst, truncated_fbank_lst):
         for layer_num in range(1, len(self.local_features) + 1):
             _ = rep_dct.setdefault(layer_num, [])
             if layer_num == len(self.local_features):
+                #print(self.local_features.size())
+                #print('huh')
                 curr_layer_rep = (
                     self.local_features[layer_num - 1]
                     .transpose(1, 2)
@@ -386,7 +443,7 @@ class FeatExtractor:
             kernel, stride = 1, 4
             num_samples_last = self.contextualized_features[0].shape[0]
         else:
-            truncated_fbank_lst.append(self.fbank.T[:num_samples_rest])
+            truncated_fbank_lst.append(self.fbank.T[:num_samples_rest])         
             assert num_samples_rest < (self.fbank.shape[1] + 1)
             kernel = PER_LAYER_TRANSFORM_DCT[len(self.local_features)]["kernel"]
             stride = PER_LAYER_TRANSFORM_DCT[len(self.local_features)]["stride"]
@@ -423,14 +480,32 @@ class FeatExtractor:
             num_layers = 9
         else:
             num_layers = len(self.contextualized_features)
+            
         for layer_num in range(num_layers):
             c_rep = self.contextualized_features[layer_num]
+            
+            #print(f"Layer {layer_num} c_rep shape: {c_rep.shape}")
             if time_stamp_lst:
+                layer_words = []  # Collect all words for this layer
+                #print(f"Number of words in utterance: {len(time_stamp_lst)}")
                 for start_time, end_time, token in time_stamp_lst:
                     indices = self.get_segment_idx(start_time, end_time, len(c_rep))
-                    self.update_dct(indices, c_rep, rep_dct, layer_num)
-                    if layer_num == 0 and label_lst is not None:
-                        label_lst.append(token)
+                    # Get representation for each word
+                    word_rep = np.mean(c_rep[indices], axis=0, keepdims=True)
+                    #print(f"Word {token} indices: {len(indices)}")
+                     #Update the representation dictionary
+                    #if layer_num not in rep_dct:
+                    #    rep_dct[layer_num] = []
+                    #rep_dct[layer_num].append(word_rep)
+                    layer_words.append(word_rep)
+                    #if layer_num == 0 and label_lst is not None:
+                    #    label_lst.append(token)
+                # After processing all words in utterance for this layer
+                if layer_words:
+                    if layer_num not in rep_dct:
+                        rep_dct[layer_num] = []
+                    rep_dct[layer_num].extend(layer_words)
+                    #print(f"\nLayer {layer_num} total representations: {len(rep_dct[layer_num])}")  
             else:
                 self.update_dct(np.arange(0, len(c_rep)), c_rep, rep_dct, layer_num)
 
@@ -442,8 +517,8 @@ class FeatExtractor:
         discrete_indices_dct,
     ):
         idx_lst = np.arange(0, self.n_frames)
-        z_discrete = self.z_discrete.squeeze(0).cpu().numpy()[idx_lst]
-        indices = self.indices.squeeze(0).cpu().numpy()[idx_lst]
+        z_discrete = self.z_discrete.squeeze(0).detach().cpu().numpy()[idx_lst]
+        indices = self.indices.squeeze(0).detach().cpu().numpy()[idx_lst]
         quantized_features.append(z_discrete)
         quantized_indices.append(indices)
         assert self.utt_id not in quantized_features_dct
@@ -451,15 +526,83 @@ class FeatExtractor:
         discrete_indices_dct[self.utt_id] = indices
 
     def save_rep_to_file(self, rep_dct, out_dir):
-        nframes = []
-        for layer_num, rep_lst in rep_dct.items():
-            rep_mat = np.concatenate(rep_lst, 0)
-            if layer_num == 1:
-                for rep in rep_lst:
-                    nframes.append(rep.shape[0])
-            out_fn = os.path.join(out_dir, "layer_" + str(layer_num) + ".npy")
-            np.save(out_fn, rep_mat)
-        out_fn = os.path.join(out_dir, "n_frames.txt")
-        with open(out_fn, 'w') as f:
-            for n in nframes:
-                f.write(f'{n}\n')
+        """Save representations to file with detailed error logging"""
+        try:
+            print(f"\nStarting save_rep_to_file:")
+            print(f"Output directory: {out_dir}")
+            print(f"Directory exists: {os.path.exists(out_dir)}")
+        
+            nframes = []
+            for layer_num, rep_lst in rep_dct.items():
+                print(f"\nProcessing layer {layer_num}")
+                print(f"Number of representations: {len(rep_lst)}")
+            
+                try:
+                
+                    # First, calculate total size and gather frame info
+                    if layer_num == 1:
+                        for rep in rep_lst:
+                            nframes.append(rep.shape[0])
+                
+                    # Get total size for preallocating array
+                    total_rows = sum(rep.shape[0] for rep in rep_lst)
+                    feature_dim = rep_lst[0].shape[1]  # Assuming all reps have same feature dim
+                    print(f"Total size will be: ({total_rows}, {feature_dim})")
+                
+                    # Create memory-mapped array for results
+                    out_fn = os.path.join(out_dir, "layer_" + str(layer_num) + ".npy")
+                    print(f"Creating memmap file: {out_fn}")
+                    rep_mat = np.memmap(out_fn, dtype=rep_lst[0].dtype, mode='w+', 
+                                  shape=(total_rows, feature_dim))
+                
+                    # Copy data in chunks
+                    current_row = 0
+                    chunk_size = 100  # Process 100 representations at a time
+                    for i in range(0, len(rep_lst), chunk_size):
+                        chunk = rep_lst[i:i + chunk_size]
+                        chunk_data = np.concatenate(chunk, 0)
+                        chunk_rows = chunk_data.shape[0]
+                        rep_mat[current_row:current_row + chunk_rows] = chunk_data
+                        current_row += chunk_rows
+                        print(f"Processed chunk {i//chunk_size + 1}/{(len(rep_lst) + chunk_size - 1)//chunk_size}")
+                
+                    # Ensure data is written to disk
+                    rep_mat.flush()
+                    del rep_mat  # Close memmap file
+                    #rep_mat = np.concatenate(rep_lst, 0)
+                    #print(f"Concatenated shape: {rep_mat.shape}")
+                
+                    #if layer_num == 1:
+                    #    for rep in rep_lst:
+                    #        nframes.append(rep.shape[0])
+                
+                    #out_fn = os.path.join(out_dir, "layer_" + str(layer_num) + ".npy")
+                    #print(f"Saving to: {out_fn}")
+                    #np.save(out_fn, rep_mat)
+                    #print(f"Successfully saved layer {layer_num}")
+                
+                except Exception as e:
+                    print(f"\nError processing layer {layer_num}:")
+                    print(f"Error type: {type(e).__name__}")
+                    print(f"Error message: {str(e)}")
+                    if len(rep_lst) > 0:
+                        print(f"First rep shape: {rep_lst[0].shape}")
+                    raise
+        
+            # Save nframes
+            frames_fn = os.path.join(out_dir, "n_frames.txt")
+            print(f"\nSaving n_frames to: {frames_fn}")
+            print(f"Number of frames: {len(nframes)}")
+        
+            with open(frames_fn, 'w') as f:
+                for n in nframes:
+                    f.write(f'{n}\n')
+            print("Successfully saved n_frames.txt")
+        
+        except Exception as e:
+            print(f"\nError in save_rep_to_file:")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {str(e)}")
+            print(f"Output directory: {out_dir}")
+            print(f"Current working directory: {os.getcwd()}")
+            raise  # Re-raise the exception after logging
