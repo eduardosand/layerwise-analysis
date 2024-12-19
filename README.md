@@ -6,7 +6,7 @@ The goal was to take the tools listed below, and extend them to investigations o
 The code was adapted for use with different datasets, and use of additional classifiers.
 
 Below will be a running list of major changes (git log shows smaller changes file by file).
-1. 
+1. Allow the use of multiple datasets across all steps, to allow for comprehensive testing across datasets (in theory this allows for the more general probing of *any* time series data, from trained SSL models).
 
 
 
@@ -108,9 +108,9 @@ Currently, all the experiments use [Librispeech](https://www.openslr.org/12), so
 Follow the next two steps to prepare data files.
 
 ```
-bash scripts/prepare_alignment_files.sh librispeech $path_to_librispeech_data $alignment_data_dir
+bash scripts/prepare_alignment_files.sh librispeech $path_to_librispeech_data $alignment_data_dir $alignment_text_grid_dir
 ```
-This will download and reformat the phone and word alignment files for Librispeech and save the alignments as dictionary files to `$alignment_data_dir`. These `.json` files map each phone/word type to a list of tuples `(utt_id, path_to_wav, start_time, end_time)`. This might take 30 minutes. _Note_: Uncomment step #3 commands if you intend to apply MI tools, this will add a few more minutes of processing time.  
+This will download and reformat the phone and word alignment files for Librispeech and save the alignments as dictionary files to `$alignment_data_dir`. These are textgrids that are then converted to .json files that end up in `$alignment_text_grid_dir`. These `.json` files map each phone/word type to a list of tuples `(utt_id, path_to_wav, start_time, end_time)`. This might take 30 minutes. _Note_: Uncomment step #3 commands if you intend to apply MI tools, this will add a few more minutes of processing time.  
 
 ### c. Prepare sampled data for analysis
 ```
