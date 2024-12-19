@@ -5,7 +5,7 @@ import os
 import scipy
 import time
 from tqdm import tqdm
-
+import os.path
 from multiprocessing import cpu_count
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
@@ -14,7 +14,7 @@ curr_dir = os.path.dirname(os.path.realpath(__file__))
 import sys
 
 sys.path.insert(0, os.path.join(curr_dir, ".."))
-from utils import read_lst, format_time
+from utils import read_lst, format_time, load_json
 
 
 def preemphasis(x, preemph):
@@ -35,7 +35,9 @@ def process_wav(
     offset=0.0,
     duration=None,
 ):
-    wav, _ = librosa.load(wav_path, sr=sr, offset=offset, duration=duration)
+    wav, orig_sr = librosa.load(wav_path, offset=offset, duration=duration)
+    #print(orig_sr)
+    wav = librosa.resample(wav, orig_sr=orig_sr, target_sr=sr)
     wav = wav / np.abs(wav).max() * 0.999
     mel = librosa.feature.melspectrogram(
         y=preemphasis(wav, preemph),
@@ -62,12 +64,14 @@ def save_rep(utt_id_fn, save_dir, data_split=None):
     """
     start = time.time()
     os.makedirs(save_dir, exist_ok=True)
-    utt_id_lst = read_lst(utt_id_fn)
-
+    utt_id_json = load_json(utt_id_fn)
     executor = ProcessPoolExecutor(max_workers=cpu_count())
     futures = []
-    for item in utt_id_lst:
-        utt_id, wav_path = item.split("\t")
+    for item in utt_id_json.keys():
+        #$utt_id, wav_path = item.split("\t")
+        speaker_id, book_id, ch_id, utt_id = item.split('_')
+        utt_id = item
+        wav_path = utt_id_json[item][0]
         out_path = os.path.join(save_dir, utt_id + ".npy")
         futures.append(executor.submit(partial(process_wav, wav_path, out_path)))
 
