@@ -326,13 +326,9 @@ class FeatExtractor:
             mask=False,
             features_only=True
         )
-                
-        
-                if hasattr(encoder_out, "layer_results"):
-                    for layer_num, layer_rep in enumerate(encoder_out["layer_results"]):
-                        self.contextualized_features[layer_num] = (
-                    layer_rep[0].squeeze(1).cpu().numpy()
-                )
+
+                for layer_num, layer_rep in enumerate(encoder_out["layer_results"]):
+                    self.contextualized_features[layer_num] = layer_rep[0].squeeze(1).detach().cpu().numpy()
         if self.rep_type == "quantized" and "hubert" not in self.model_name:
             self.z_discrete, self.indices = self.encoder.quantize(self.in_data)
         if self.rep_type == "local":
@@ -480,7 +476,8 @@ class FeatExtractor:
             num_layers = 9
         else:
             num_layers = len(self.contextualized_features)
-            
+        print('what happens now')
+        print(num_layers)
         for layer_num in range(num_layers):
             c_rep = self.contextualized_features[layer_num]
             
