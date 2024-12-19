@@ -151,7 +151,7 @@ def save_rep(
     # added to help with memory constraints
     temp_dir = os.path.join(save_dir, "temp_batches")
     Path(temp_dir).mkdir(exist_ok=True)
-    print(utt_id_fn)
+    # print(utt_id_fn)
     if ".tsv" in utt_id_fn:
         utt_id_lst = read_lst(utt_id_fn)
         utt_id_dct = None
@@ -173,8 +173,6 @@ def save_rep(
     quantized_features_dct = {}
     discrete_indices_dct = {}
     # Initialize structure for incremental layer files
-    if rep_type != "quantized":
-        layer_files = {}
     # Process in batches
     start = time.time()
     batches = [utt_id_lst[i:i + batch_size] for i in range(0, len(utt_id_lst), batch_size)]
@@ -186,6 +184,9 @@ def save_rep(
         'indices': os.path.join(temp_dir, "indices.npy")
     }        
     labels_lst=[]
+    if rep_type != "quantized":
+        layer_files = {}
+
     for batch_idx, batch_items in enumerate(tqdm(batches)):
         (batch_rep_dct, batch_transformed_fbank, batch_truncated_fbank,
          batch_quantized_features, batch_quantized_indices, batch_labels,
@@ -194,7 +195,7 @@ def save_rep(
             offset, mean_pooling, span, utt_id_dct
         )
         labels_lst.extend(batch_labels)
-    	# Save batch results to temporary files
+        # Save batch results to temporary files
         if rep_type != "quantized":
                 for key, value in batch_rep_dct.items():
                     value_array = np.vstack(value)
@@ -205,12 +206,7 @@ def save_rep(
                     else:
                         existing_array = np.load(layer_files[key])
                         combined_array = np.vstack([existing_array, value_array])
-                        total_reps = combined_array.shape[0]
                         np.save(layer_files[key], combined_array)
-                        # Append to existing file
-                        #value_array = np.array(value, dtype=object)
-                        #with open(layer_files[key], 'ab') as f:
-                        #    np.save(f, value_array)
                     del value_array
                 del batch_rep_dct
                 force_cleanup()
@@ -273,7 +269,6 @@ def save_rep(
     print("Final memory usage:")
     log_memory_usage()
     print("%s representations saved to %s" % (rep_type, save_dir))
-
     print("Time required: %.1f mins" % ((time.time() - start) / 60))
 
 def combine(
