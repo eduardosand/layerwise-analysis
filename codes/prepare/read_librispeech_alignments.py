@@ -13,29 +13,35 @@ from utils import save_dct, write_to_file, load_dct, read_lst
 
 
 class LibrispeechAlign:
-    def save_data(self, data_dir, dataset_split, audio_dir, audio_ext):
+    def save_data(self, data_dir, dataset_split, audio_dir, audio_ext, save_data_dir):
         """
         Save alignment info as a dictionary of token mapped to a list of occurences with time stamps
         Also, updates the count dictionary and list of tokens
+        data_dir is where the alignments will sit, but also where all the textgrid objects should be which complicates the analysis
         """
         self.audio_dir = audio_dir
         self.audio_ext = audio_ext
         self.dataset_split = dataset_split
         self.data_dir = data_dir
+        self.save_data_dir = save_data_dir
+        print(audio_dir)
+        print(audio_ext)
+        print(dataset_split)
+        print(data_dir)
 
         token_lst_dct = self.read_data()
-        self.get_token_alignment_ordered_lst(token_lst_dct, data_dir, dataset_split)
+        self.get_token_alignment_ordered_lst(token_lst_dct, save_data_dir, dataset_split)
         token_alignment_dct = self.get_token_alignment_dct(token_lst_dct)
         for key, value in token_alignment_dct.items():
             save_dct(
-                os.path.join(data_dir, f"alignment_{key}_{dataset_split}.json"), value
+                os.path.join(save_data_dir, f"alignment_{key}_{dataset_split}.json"), value
             )
 
         if "train" in dataset_split:
             count_fn, token_lst_fn = {}, {}
             for key in ["phone", "word"]:
-                count_fn[key] = os.path.join(data_dir, f"{key}_count.json")
-                token_lst_fn[key] = os.path.join(data_dir, f"{key}.lst")
+                count_fn[key] = os.path.join(save_data_dir, f"{key}_count.json")
+                token_lst_fn[key] = os.path.join(save_data_dir, f"{key}.lst")
             self.update_tokens(count_fn, token_lst_fn, token_alignment_dct)
 
     def read_data(self):
@@ -48,7 +54,6 @@ class LibrispeechAlign:
         for fname in tqdm(all_fns):
             self.get_info(fname, phn_lst, wrd_lst)
         token_lst_dct = {"phone": phn_lst, "word": wrd_lst}
-
         return token_lst_dct
 
     def get_token_alignment_dct(self, token_lst_dct):
@@ -62,7 +67,7 @@ class LibrispeechAlign:
                 utt_id, start, end, token = item.split(" ")
                 audio_path = os.path.join(
                     self.audio_dir,
-                    "/".join(utt_id.split("-")[:2]),
+                    "/".join(utt_id.split("_")[:2]),
                     utt_id + "." + self.audio_ext,
                 )
                 _ = token_alignment_dct[key].setdefault(token, [])
