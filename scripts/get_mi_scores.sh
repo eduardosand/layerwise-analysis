@@ -7,7 +7,7 @@ save_dir_pth=$6
 
 dataset=librispeech
 eval_dataset_split=dev-clean
-train_dataset_split=train-clean
+train_dataset_split=train-clean-100
 rep_type=contextualized
 
 sample_data_dir="data_samples/librispeech/${span}_level"
@@ -16,7 +16,7 @@ rep_dir="$save_dir_pth/${model_name}/${dataset}_dev-clean_sample${data_sample}/$
 save_dir="logs/${dataset}_${model_name}"
 mkdir -p $save_dir
 save_fn="$save_dir/mi_${span}_${eval_dataset_split}_${train_dataset_split}.lst"
-
+echo "running python code now"
 python codes/tools/get_scores.py mi \
 --eval_dataset_split $eval_dataset_split \
 --sample_data_dir `realpath $sample_data_dir` \
@@ -26,4 +26,5 @@ python codes/tools/get_scores.py mi \
 --span $span \
 --iter_num $iter_num \
 --data_sample $data_sample \
+--num_clusters 500 \
 --train_dataset_split $train_dataset_split
