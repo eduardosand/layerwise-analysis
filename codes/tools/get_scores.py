@@ -41,7 +41,7 @@ class getCCA:
         instance_cap=None, # cap on number of instances per word
     ):
         """
-        exp_name: cca-mel | cca-intra | cca-inter | cca-glove | cca-agwe
+        exp_name: cca-mel | cca-intra | cca-inter | cca-glove | cca-agwe | cca_prosody | cca_boundary
         """
         print(eval_single_layer)
         if eval_single_layer:
@@ -58,7 +58,7 @@ class getCCA:
         self.sample_data_fn = sample_data_fn
         self.model_name = model_name
         self.score_dct = {}
-        if exp_name in ["cca_glove", "cca_agwe", "cca_word"]:
+        if exp_name in ["cca_glove", "cca_agwe", "cca_word", "cca_prosody", "cca_boundary"]:
             assert span == "word"
         elif exp_name == "cca_phone":
             assert span == "phone"
@@ -130,7 +130,7 @@ class getCCA:
             all_fbank_downsampled = np.load(
                 os.path.join(self.fbank_dir, "all_features_downsampled.npy")
             )
-        layer_start = 1
+        layer_start = 0
 
         for layer_id in range(1, self.num_conv_layers + 1):
             if self.get_score_flag(f"C{layer_id}"):
@@ -150,9 +150,10 @@ class getCCA:
                     f"C{layer_id}",
                     subset=subset,
                 )
-
-        for layer_id in range(layer_start, self.num_transformer_layers + 1):
-            if self.get_score_flag(f"T{layer_id}"):
+	
+        print(f'Starting from layer {layer_start}, Ending at {self.num_transformer_layers}')
+        for layer_id in range(layer_start, self.num_transformer_layers):
+            if self.get_score_flag(f"T{layer_id+1}"):
                 start_time = time.time()
                 fname = "layer_" + str(layer_id) + ".npy"
                 rep_mat = np.load(os.path.join(rep_dir_contextualized, fname))
@@ -160,13 +161,15 @@ class getCCA:
                     all_fbank_downsampled.T,
                     rep_mat.T,
                     rep_dir_contextualized,
-                    f"T{layer_id}",
+                    # added plus one
+                    f"T{layer_id+1}",
                 )
 
     def cca_intra(self):
         rep_dir = os.path.join(self.rep_dir, "contextualized", "frame_level")
         z_mat = np.load(os.path.join(rep_dir, f"layer_{self.base_layer}.npy"))
-        for layer_id in range(1, self.num_transformer_layers + 1):
+        # edits, i changed the number of layers now only to self.num_transformer_layers, as opposed to that + 1.
+        for layer_id in range(1, self.num_transformer_layers):
             if self.get_score_flag(layer_id):
                 start_time = time.time()
                 c_mat = np.load(os.path.join(rep_dir, f"layer_{layer_id}.npy"))
@@ -180,7 +183,8 @@ class getCCA:
     def cca_inter(self):
         rep_dir1 = os.path.join(self.rep_dir, "contextualized", "frame_level")
         rep_dir2 = os.path.join(self.rep_dir2, "contextualized", "frame_level")
-        for layer_id in range(1, self.num_transformer_layers + 1):
+        # edits, i changed the number of layers now only to self.num_transformer_layers, as opposed to that + 1.
+        for layer_id in range(1, self.num_transformer_layers):
             if self.get_score_flag(layer_id):
                 start_time = time.time()
                 c_mat1 = np.load(os.path.join(rep_dir1, f"layer_{layer_id}.npy"))
@@ -201,23 +205,41 @@ class getCCA:
 
     def update_label_lst(self, split_num, all_labels, dir_name=None):
         assert dir_name is not None
-        fname = os.path.join(dir_name, f"labels_{split_num}.lst")
+        if self.exp_name == 'cca_word':
+            fname = os.path.join(dir_name, f"labels_{split_num}.lst")
+        elif self.exp_name == 'cca_prosody':
+            fname = os.path.join(dir_name, f"prominence_labels_{split_num}.lst")
+        elif self.exp_name == 'cca_boundary':
+            fname = os.path.join(dir_name, f"boundary_labels_{split_num}.lst")
         label_lst = read_lst(fname)
         all_labels.extend(label_lst)
 
     def filter_label_lst(self, all_labels, embed_dct):
+        print("First 5 labels:", all_labels[:5])  # Debug
+        print("Number of labels:", len(all_labels))
+        print("Number of embeddings:", len(embed_dct))
+        print("First 5 embedding keys:", list(embed_dct.keys())[:5])  # Debug
         label_idx_dct = {}
         num_labels = len(all_labels)
         valid_indices = list(np.arange(num_labels))
         # valid_label_lst = []
-        for idx, label in enumerate(all_labels):
-            if label not in embed_dct:
-                valid_indices.remove(idx)
-        for idx in valid_indices:
-            label = all_labels[idx]
-            _ = label_idx_dct.setdefault(label, [])
-            label_idx_dct[label].append(idx)
-        print(
+        if self.exp_name in ["cca_prosody", "cca_boundary"]:
+            # For prosody and boundary, all labels are valid since they're continuous numbers
+            # Convert string labels to float for continuous values
+            for idx, label in enumerate(all_labels):
+                _ = label_idx_dct.setdefault(label, [])
+                label_idx_dct[label].append(idx)
+            print(f"Using all {num_labels} segments for {self.exp_name}")
+            return valid_indices, label_idx_dct
+        else:
+            for idx, label in enumerate(all_labels):
+                if label not in embed_dct:
+                    valid_indices.remove(idx)
+            for idx in valid_indices:
+                label = all_labels[idx]
+                _ = label_idx_dct.setdefault(label, [])
+                label_idx_dct[label].append(idx)
+            print(
             f"{num_labels-len(valid_indices)} of {num_labels} {self.span} segments dropped"
         )
         return valid_indices, label_idx_dct
@@ -251,9 +273,10 @@ class getCCA:
         else:
             rep_dir = os.path.join(self.rep_dir, "contextualized", f"{self.span}_level")
             all_labels = []
-        embed_dct = load_dct(self.embed_fn)
+        embed_dct = load_dct(self.embed_fn) if self.exp_name not in ["cca_prosody", "cca_boundary"] else None
+            
         num_splits = self.get_num_splits()
-        for layer_id in range(self.num_transformer_layers + 1):
+        for layer_id in range(self.num_transformer_layers):
             if self.get_score_flag(layer_id):
                 if check_cond:
                     all_rep = np.load(os.path.join(rep_dir, f"layer_{self.layer_num}.npy"))
@@ -262,27 +285,46 @@ class getCCA:
                     all_rep = []
                     for split_num in range(num_splits):
                         rep_fn = os.path.join(rep_dir, str(split_num), f"layer_{layer_id}.npy")
-                        rep_mat = np.load(rep_fn)
+                        #print(rep_fn)
+                        rep_mat = np.load(rep_fn, allow_pickle=True)
                         all_rep.extend(rep_mat)
                         if layer_id == 0 or self.eval_single_layer:
                             self.update_label_lst(split_num, all_labels, rep_dir)
 
                     all_rep = np.array(all_rep)  # N x d
+                    print(all_rep.shape)
                     if layer_id == 0 or self.eval_single_layer:
-                        valid_indices, _ = self.filter_label_lst(all_labels, embed_dct)
-                        all_embed = np.array(
+                        if self.exp_name in ["cca_prosody", "cca_boundary"]:
+                        # For prosody/boundary, convert string labels to float array
+                            all_embed = np.array([float(label) for label in all_labels]).reshape(-1, 1)
+                            valid_indices = list(range(len(all_labels)))
+                            valid_label_lst = all_labels
+                        else:
+                            valid_indices, _ = self.filter_label_lst(all_labels, embed_dct)
+                            all_embed = np.array(
                             [embed_dct[all_labels[idx1]] for idx1 in valid_indices]
                         )
-                        valid_label_lst = [all_labels[idx1] for idx1 in valid_indices]
+                            print('huh')
+                            valid_label_lst = [all_labels[idx1] for idx1 in valid_indices]
+                    print(len(valid_indices))
                     all_rep = all_rep[np.array(valid_indices)]
-                sim_score = self.get_cca_score(
-                    all_rep.T,
-                    all_embed.T,
-                    rep_dir,
-                    layer_id,
-                    label_lst=valid_label_lst,
-                )
-
+                
+                if self.exp_name in ["cca_prosody", "cca_boundary"]:
+                    sim_score = self.get_cca_score(
+        all_rep.T,
+        all_embed.T,
+        rep_dir,
+        layer_id,
+        # Remove label_lst since we don't need it for continuous values
+    )
+                else:
+                    sim_score = self.get_cca_score(
+        all_rep.T,
+        all_embed.T,
+        rep_dir,
+        layer_id,
+        label_lst=valid_label_lst,
+    )
     def cca_word(self):
         self.cca_embed()
 
@@ -301,6 +343,11 @@ class getCCA:
     def cca_syntactic(self):
         self.cca_embed()
 
+    def cca_prosody(self):
+        self.cca_embed()
+    
+    def cca_boundary(self):
+        self.cca_embed()
 
 class getMI:
     def __init__(
@@ -329,6 +376,7 @@ class getMI:
             )  # load train data
             self.eval_rep, self.eval_labels = None, None
         elif "dev" in eval_dataset_split:
+            print(train_dataset_split)
             self.all_rep, self.all_labels = self.read_data(
                 train_dataset_split
             )  # load train data
@@ -381,10 +429,12 @@ class getMI:
         sample_data_fn = os.path.join(
             self.sample_data_dir, f"{split}_segments_sample{self.data_sample}_0.json"
         )
+        print(sample_data_fn)
         search_str = sample_data_fn.replace("_0.json", "_*.json")
         num_splits = len(glob(search_str))
         assert num_splits != 0
         all_rep, all_labels = [], []
+        print(f'The number of splits is {num_splits}')
         for idx in range(num_splits):
             rep_fn = os.path.join(rep_dir, str(idx), f"layer_{self.layer_id}.npy")
             rep_mat = np.load(rep_fn)

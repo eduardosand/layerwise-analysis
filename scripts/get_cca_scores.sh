@@ -3,9 +3,9 @@ data_sample=$2
 exp_name=$3
 span=$4
 save_dir_pth=$5
-layer_num=$6
+dataset=$6
+layer_num=$7
 
-dataset=librispeech
 dataset_split=dev-clean
 base_layer=0
 ft_data=960h

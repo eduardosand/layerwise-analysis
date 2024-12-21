@@ -311,11 +311,12 @@ class FeatExtractor:
                 num_layers = len(self.encoder.encoder.layers) 
                 features, padding_mask = self.encoder.extract_features(
                     self.in_data,
-                    output_layer=num_layers
+                    output_layer=0
                 )
                 x = features
                 for layer_idx, layer in enumerate(self.encoder.encoder.layers):
                     x, _ = layer(x, padding_mask)
+
                     self.contextualized_features[layer_idx] = x.squeeze(0).detach().cpu().numpy()
                 
             else:
@@ -326,7 +327,7 @@ class FeatExtractor:
             mask=False,
             features_only=True
         )
-
+                #print(encoder_out.keys())
                 for layer_num, layer_rep in enumerate(encoder_out["layer_results"]):
                     self.contextualized_features[layer_num] = layer_rep[0].squeeze(1).detach().cpu().numpy()
         if self.rep_type == "quantized" and "hubert" not in self.model_name:
@@ -476,8 +477,6 @@ class FeatExtractor:
             num_layers = 9
         else:
             num_layers = len(self.contextualized_features)
-        print('what happens now')
-        print(num_layers)
         for layer_num in range(num_layers):
             c_rep = self.contextualized_features[layer_num]
             
