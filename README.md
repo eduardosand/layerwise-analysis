@@ -7,7 +7,9 @@ The code was adapted for use with different datasets, and use of additional clas
 
 Below will be a running list of major changes (git log shows smaller changes file by file).
 1. Allow the use of multiple datasets across all steps, to allow for comprehensive testing across datasets (in theory this allows for the more general probing of *any* time series data, from trained SSL models).
-
+2. Updated getting representations from transformers according to current implementations in fairseq.
+3. Added two methods for CCA_prosody, CCA_boundary to make use of additional labels.
+4. Additional basic scripts plotting distributions of labels, and plotting results of additional CCA experiments shown above.
 
 
 
